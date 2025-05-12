@@ -1,0 +1,67 @@
+using System.Text.Json;
+using Azure.Messaging.ServiceBus;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.Functions.Worker.Http;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+
+namespace EmailQueueFunction
+{
+    public class PostToQueue
+    {
+        private readonly ILogger _logger;
+        private readonly IConfiguration _configuration;
+
+        public PostToQueue(ILoggerFactory loggerFactory, IConfiguration configuration)
+        {
+            _logger = loggerFactory.CreateLogger<PostToQueue>();
+            _configuration = configuration;
+        }
+
+        [Function("PostToQueue")]
+        public async Task<HttpResponseData> Run(
+            [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData req)
+        {
+            try
+            {
+                var requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+                var data = JsonSerializer.Deserialize<EmailRequest>(requestBody);
+
+                if (string.IsNullOrWhiteSpace(data?.EmailId))
+                {
+                    var badRequest = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
+                    await badRequest.WriteStringAsync("Missing or invalid emailId.");
+                    return badRequest;
+                }
+
+                string connectionString = _configuration["ServiceBusConnection"];
+                string queueName = _configuration["QueueName"] ?? "test-queue";
+
+                var client = new ServiceBusClient(connectionString);
+                var sender = client.CreateSender(queueName);
+
+                var message = new ServiceBusMessage(data.EmailId);
+                await sender.SendMessageAsync(message);
+
+                await sender.DisposeAsync();
+                await client.DisposeAsync();
+
+                var response = req.CreateResponse(System.Net.HttpStatusCode.OK);
+                await response.WriteStringAsync($"Email '{data.EmailId}' sent to queue.");
+                return response;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to send message.");
+                var response = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
+                await response.WriteStringAsync("Error sending message.");
+                return response;
+            }
+        }
+    }
+
+    public class EmailRequest
+    {
+        public string EmailId { get; set; } = string.Empty;
+    }
+}
