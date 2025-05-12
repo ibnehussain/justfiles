@@ -1,0 +1,58 @@
+using System.Net;
+using System.Text.Json;
+using Azure.Messaging.ServiceBus;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.Functions.Worker.Http;
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+
+public class EmailRequest
+{
+    public string? EmailId { get; set; }  // Nullable to avoid CS8600
+}
+
+public class EmailQueueFunction
+{
+    private readonly IConfiguration _configuration;
+
+    // Constructor to inject IConfiguration
+    public EmailQueueFunction(IConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
+
+    [Function("PostToQueue")]
+    public async Task<HttpResponseData> Run(
+        [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData req)
+    {
+        var requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+        var data = JsonSerializer.Deserialize<EmailRequest>(requestBody, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+
+        if (string.IsNullOrWhiteSpace(data?.EmailId))
+        {
+            var badRequest = req.CreateResponse(HttpStatusCode.BadRequest);
+            await badRequest.WriteStringAsync("Missing or invalid emailId.");
+            return badRequest;
+        }
+
+        // Authenticate and retrieve the ServiceBus connection string from Key Vault
+        var keyVaultUrl = _configuration["KeyVaultUrl"];
+        var client = new SecretClient(new Uri(keyVaultUrl), new DefaultAzureCredential());
+        KeyVaultSecret secret = await client.GetSecretAsync("ServiceBusConnection");
+
+        string connectionString = secret.Value;
+
+        var serviceBusClient = new ServiceBusClient(connectionString);
+        var sender = serviceBusClient.CreateSender("<your-queue-name>");
+
+        var message = new ServiceBusMessage(data.EmailId);  // Safe creation
+        await sender.SendMessageAsync(message);
+
+        var response = req.CreateResponse(HttpStatusCode.OK);
+        await response.WriteStringAsync($"Email '{data.EmailId}' added to the queue.");
+        return response;
+    }
+}
