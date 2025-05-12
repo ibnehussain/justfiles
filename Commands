@@ -1,0 +1,7 @@
+Commands:
+func init EmailQueueFunction --worker-runtime dotnetIsolated --target-framework net8.0
+cd EmailQueueFunction
+dotnet add package Azure.Messaging.ServiceBus
+dotnet add package Azure.Identity
+dotnet add package Azure.Security.KeyVault.Secrets
+func new --name PostToQueue --template "Http Trigger" --authlevel "Function"
